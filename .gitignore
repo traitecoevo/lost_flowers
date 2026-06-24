@@ -1,1 +1,4 @@
 .DS_Store
+
+# R map-tile cache (regenerated automatically)
+rosm.cache/
