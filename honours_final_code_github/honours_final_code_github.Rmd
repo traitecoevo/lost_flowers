@@ -1,0 +1,1197 @@
+---
+title: "honours_final_code_github"
+output: html_notebook
+---
+# 1 - Pre-analysis
+## 1.1 - Installing packages
+```{r}
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("readr")
+install.packages("stringr")
+install.packages("purrr")
+install.packages("tibble")
+
+install.packages("ggplot2")
+install.packages("treemapify")
+install.packages("patchwork")
+
+install.packages("sf")
+install.packages("ggspatial")
+install.packages("prettymapr")
+install.packages("rnaturalearth")
+install.packages("rnaturalearthdata")
+install.packages("rmapshaper")
+
+remotes::install_github("ropensci/rnaturalearthhires")
+install.packages(
+  "rnaturalearthhires",
+  repos = "https://ropensci.r-universe.dev",
+  type = "source"
+)
+install.packages("rnaturalearthhires")
+
+install.packages("galah")
+
+remotes::install_github("traitecoevo/austraits", dependencies = TRUE, upgrade = "ask")
+remotes::install_github("traitecoevo/traits.build", dependencies = TRUE, upgrade = "ask")
+```
+
+## 1.2 Loading packages
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(purrr)
+library(tibble)
+
+library(ggplot2)
+library(treemapify)
+library(patchwork)
+
+library(sf)
+library(ggspatial)
+library(prettymapr)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(rnaturalearthhires)
+library(rmapshaper)
+
+library(galah)
+library(austraits)    # functions for exploring a traits.build database, available at Github repo
+library(traits.build) # additional functions for exploring a traits.build database, available at Github repo
+```
+## 1.3 Pulling AusTraits data
+```{r}
+source("https://raw.githubusercontent.com/traitecoevo/traits.build-book/master/data/extra_functions.R")
+
+aus_traits <- austraits::get_versions() %>%
+  dplyr::filter(version == "7.0.0") %>%
+  dplyr::pull("doi")
+aus_traits
+
+austraits <- austraits::load_austraits(doi = aus_traits)
+austraits
+```
+
+## 1.4 Data wrangling
+### 1.4.1 importing and creating dataset
+```{r}
+# Importing data
+setwd("/Users/dylan/Documents/GitHub/lost_flowers/honours_final_code_github")
+master_data <- read.csv("data_searching_cleaned.csv")
+master_data
+
+# Filtering by searchable populations
+searched_for_data <- master_data %>% 
+  filter(refindable == "Y")
+```
+### 1.4.2 Cleaning dataset
+```{r}
+# Fixing taxonomic issues
+searched_for_data <- searched_for_data %>%
+  mutate(species_name = case_when(
+    species_name == "Calamagrostis quadriseta" ~ "Deyeuxia quadriseta",
+    species_name == "Sphaeropteris australis" ~ "Cyathea leichhardtiana",
+    species_name == "Chenopodium trigonon" ~ "Einadia trigonos",
+    TRUE ~ species_name))
+
+# Adding a variable for binary found outcome
+searched_for_data <- searched_for_data %>%
+  mutate(found_simplified = case_when(
+    found %in% c("Y", "?Y") ~"Yes",
+    found %in% c("N", "?N") ~"No",
+    found %in% c("?", "F", "") ~"?",
+    TRUE ~ found)) %>%
+  mutate(found_simplified_withF = case_when(
+    found %in% c("Y", "?Y") ~"Yes",
+    found %in% c("N", "?N") ~"No",
+    found %in% c("?", "") ~"?",
+    found %in% c("F") ~ "Failed search",
+    TRUE ~ found)) %>%
+  mutate(found_simplified_number = case_when(
+    found_simplified %in% c("Yes") ~1,
+    found_simplified %in% c("No") ~0,
+    found_simplified %in% c("?") ~NA))
+
+# To be able to choose the order of these response variables when graphing
+searched_for_data$found_factor <- factor(searched_for_data$found, levels = c("Y", "?Y", "N", "?N", "F", "?", "")) 
+
+# Splitting lat and long into separate columns for mapping
+searched_for_data <-
+  searched_for_data %>%
+  separate(search_area_coordinates, into = c("search_area_lat", "search_area_long"), sep = ", ", convert = TRUE, remove = FALSE)
+```
+### 1.4.3 Filtering AusTraits data
+```{r}
+# creating a subset of Austraits data with only target species
+austraits_searching <- 
+  austraits$traits %>%
+  filter(taxon_name %in% c(searched_for_data$species_name)) %>% # filter by only for species searched for
+  left_join(searched_for_data %>% # add re-found or not column
+              select(species_name, found), by = c("taxon_name" = "species_name")) %>%
+  mutate(found_simplified = case_when(
+    found %in% c("Y", "?Y") ~"Yes",
+    found %in% c("N", "?N") ~"No",
+    found %in% c("?", "F", "") ~"?",
+    TRUE ~ found)) %>%
+  mutate(found_simplified_number = case_when(
+    found_simplified %in% c("Yes") ~1,
+    found_simplified %in% c("No") ~0,
+    found_simplified %in% c("?") ~NA))
+
+# filtering out unknowns
+austraits_searching_foundYorN <- 
+  austraits_searching %>%
+  filter(found_simplified != "?")
+
+# adding woodiness data
+woodiness_data <- austraits_searching %>%
+  filter(trait_name == "woodiness_detailed")
+
+# filtering out conflicting values
+woodiness_data_cleaned <- 
+  woodiness_data %>%
+  group_by(taxon_name) %>%
+  filter(n_distinct(value) == 1) %>% # filtering out species with conflicting values
+  distinct(taxon_name, .keep_all = TRUE) %>%
+  ungroup()
+
+#filtering out "?" for graphs and stats - didnt do originally as adding woodiness data to main dataset, to wanted to have it for all
+woodiness_data_cleaned <- 
+  woodiness_data_cleaned %>%
+  filter(found_simplified != "?")
+
+#ADDING WOODINESS DATA TO MAIN DATA TABLE
+searched_for_data <- 
+  searched_for_data %>%
+  select(-any_of("woodiness")) %>% #removing column if it already exists (to avoid duplicates)
+  left_join(
+    woodiness_data_cleaned %>%
+      select(taxon_name, value), by = c("species_name" = "taxon_name")) %>%
+  rename(woodiness = value) # renaming column to "woodiness"
+
+#removing "?"
+searched_for_data_YorN <- searched_for_data %>%
+  filter(found_simplified != "?")
+```
+
+### 1.4.4 Checking stuff
+```{r}
+n_distinct(austraits_searching_foundYorN$taxon_name) # checking number of species that I've filtered to
+setdiff(searched_for_data$species_name, austraits_searching_foundYorN$taxon_name) # checking missing species - should be good now (the 7 missing ones had "?" found value)
+
+# searching a row in data frame
+searched_for_data %>%
+  filter(species_name == "Flagellaria indica") %>% # change species name and / or trait name
+  select(species_name, woodiness) # what columns i want to view
+
+austraits::lookup_trait(database = austraits, term = "dispersal") # use to look up traits: place search term after term = "..."
+
+filter(austraits$traits,
+       taxon_name %in% c("Gonocarpus tetragynus"),
+       trait_name == "woodiness_detailed") # use to look up species in AusTraits
+
+austraits %>%  # check values of a given trait
+  pluck("traits") %>%
+  filter(trait_name == "dispersal_appendage") %>% #CHANGE TRAIT NAME HERE
+  pull("value") %>% 
+  unique()
+
+# checking which species are missing values
+austraits_searching_foundYorN %>%
+  distinct(taxon_name) %>%
+  anti_join(
+    austraits_searching_foundYorN %>%
+      filter(trait_name == "seedbank_longevity") %>%
+      distinct(taxon_name),
+    by = "taxon_name"
+  )
+
+# checking what species have a given trait entry
+austraits_searching_foundYorN %>%
+  filter(trait_name == "serotiny") %>% # enter trait here
+  arrange(taxon_name)
+```
+
+
+
+# 2 - Trait analysis
+## 2.1 - Height
+### 2.1.1 - Height data wrangling
+```{r}
+# Extract height data
+height_data <- austraits_searching_foundYorN %>%
+  filter(trait_name == "plant_height", 
+         life_stage != "seedling") %>% # Filtering out data points from seedlings
+  mutate(value=as.numeric(value)) # changing plant height data to numerical
+
+# NOTE: there are also min and mean values, but not using these
+max_height_data <- height_data %>% 
+  filter(value_type == "maximum")
+
+# Adding a column with mean max plant height to data table
+max_height_data_cleaned <- max_height_data %>% 
+  group_by(taxon_name) %>%
+  mutate(average_height = mean(value, na.rm = TRUE)) %>%
+  distinct(taxon_name, .keep_all = TRUE)
+```
+### 2.1.2 - Height violin plots
+```{r}
+log_height_plot <- 
+  ggplot(max_height_data_cleaned, aes(x = average_height, y = found_simplified, fill = found_simplified)) +
+  geom_violin() +
+  theme_minimal() +
+  labs(
+    title = "Re-findability by plant height (n = 77)",
+    x = "Average height (log transformed m)", 
+    y = "Found?",
+    fill = "Found?") + 
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")) +
+  scale_x_log10() +
+  theme(legend.position = "none")
+log_height_plot
+```
+### 2.1.3 - Height stats
+```{r}
+summary(
+  max_height_data_cleaned %>%
+  glm(as.numeric(found_simplified_number) ~ log10(average_height),
+      family = binomial(link = "logit"),
+      data = .)
+  )
+```
+
+## 2.2 Woodiness
+### 2.2.1 - Woodiness data wrangling
+```{r}
+# NOTE - some species have different values depending on source, when filtering, the most common is selected.
+#   Eleocharis sphacelata: “herbaceous woody_root”(1), “herbaceous” (5)
+#   Gonocarpus tetragynus: “herbaceous woody_base” (1), “herbaceous” (4)
+#   Flagellaria indica: "herbaceous" (2), "woody" (1)
+#   Monoxtaxis linifolia: "woody base" (1), "herbaceous woody base" (1)
+#   Piper hederaceum: "herbaceous" (1), "herbaceous woody" (1)
+#   Opercularia aspera: "herbaceous" (1), "herbaceous woody" (1)
+#   Senecio pinnatifolius: “herbaceous semi-woody” (1), “herbaceous" (many)
+
+#checking species with conflicting trait values 
+woodiness_data %>%
+  group_by(taxon_name) %>%
+  filter(n_distinct(value) > 1) %>% #filtering for multiple trait values
+  count(taxon_name, value) %>% #adding a count column
+  arrange(taxon_name) # sorting by species
+
+
+table(woodiness_data_cleaned$value) # checking
+```
+### 2.2.2 - Woodiness graph
+```{r}
+woodiness_plot <- 
+  ggplot(woodiness_data_cleaned, aes(x = value, fill = found_simplified)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(
+    title = "Re-findability by woodiness (n = 88)",
+    x = "Woodiness", 
+    y = "Species count",
+    fill = "Found?") +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")) +
+  scale_x_discrete(
+    labels = c("herbaceous" = "Herbaceous", "woody" = "Woody"))
+woodiness_plot
+```
+### 2.2.3 - Woodiness stats
+```{r}
+woodiness_table <- table(woodiness_data_cleaned$value, woodiness_data_cleaned$found_simplified) # creating a contingency table
+chisq.test(woodiness_table) # chi squared test
+chisq.test(woodiness_table)$residuals # gives a value for each value interaction
+```
+## 2.3 - Resprouting capability
+### 2.3.1 - Resprouting data wrangling
+```{r}
+resprouting_data <- austraits_searching_foundYorN %>%
+  filter(trait_name == "resprouting_capacity") %>%
+  arrange(taxon_name)
+
+# Assigning the value "partial_resprouting" to species with conflicting data
+resprouting_data_cleaned <- resprouting_data %>%
+  group_by(taxon_name) %>%
+  mutate(value = if (n_distinct(value) > 1) "partial_resprouting" else unique(value)) %>%
+  slice(1) %>%
+  ungroup() %>%
+  arrange(taxon_name)
+```
+### 2.3.2 - Resprouting graph
+```{r}
+resprouting_plot <-
+  ggplot(resprouting_data_cleaned, aes(x = value, fill = found_simplified)) +
+  geom_bar(position = "stack") +
+  theme_minimal() +
+  labs(
+    title = "Re-findability by resprouting capability \n(n = 80)",
+    x = "Resprouting capability", 
+    y = "Species count",
+    fill = "Found?") +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")) +
+scale_x_discrete(
+  labels = c("fire_killed" = "Killed by fire", "partial_resprouting" = "Partial\nresprouting", "resprouts" = "Resprouter"))
+resprouting_plot
+```
+
+### 2.3.3 - Resprouting stats
+```{r}
+resprouting_table <- table(resprouting_data_cleaned$found_simplified, resprouting_data_cleaned$value)
+chisq.test(resprouting_table)
+chisq.test(resprouting_table)$residuals
+```
+## 2.4 Seedbank
+### 2.4.1 Seedbank data wrangling
+```{r}
+seedbank_data <- austraits_searching_foundYorN %>%
+  filter(trait_name == "seedbank_location") %>%
+  mutate(value_simplified = case_when(
+    value %in% c("soil_seedbank", "canopy_seedbank") ~"seedbank",
+    TRUE ~ value)) %>%
+  arrange(taxon_name)
+
+# Removing species with conflicting values
+seedbank_data_cleaned <- 
+  seedbank_data %>%
+  group_by(taxon_name) %>%
+  filter(n_distinct(value) == 1) %>%
+  slice(1) %>%
+  arrange(taxon_name)
+```
+### 2.4.2 Seedbank graph
+```{r}
+seedbank_simplified_plot <-
+  ggplot(seedbank_data_cleaned, aes(x = value_simplified, fill = found_simplified)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(
+    title = "Re-findability by seedbank presence (n = 33)",
+    x = "Seedbank presence", 
+    y = "Species count",
+    fill = "Found?") +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")) +
+  scale_x_discrete(
+    labels = c("seedbank" = "Present", "none" = "Absent"))
+seedbank_simplified_plot
+```
+### 2.4.3 - Seedbank stats
+```{r}
+seedbank_simplified_table <- table(seedbank_data_cleaned$found_simplified, seedbank_data_cleaned$value_simplified)
+chisq.test(seedbank_simplified_table)
+chisq.test(seedbank_simplified_table)$residuals
+```
+
+## 2.5 - Latitude quantile
+### 2.5.1 - Galah data wrangling
+```{r}
+galah_config(atlas = "ALA",
+             email = "d.petrozzi@student.unsw.edu.au")
+
+# Creating data frame with all target species' ALA records (only need to run once)
+ALA_data <-
+  galah_call() %>%
+  identify(searched_for_data$species_name) %>%
+  collect()
+
+# Pulling a list of species names as they appear in ALA
+ALA_taxa_data <- search_taxa(searched_for_data$species_name) %>%
+  select(search_term, scientific_name) %>% # choosing columns to remain
+  distinct(search_term, scientific_name) %>%
+  collect()
+
+# And then joining to existing data
+searched_for_data <- 
+  searched_for_data %>%
+  select(-any_of("scientific_name_ALA")) %>% #removing column if it already exists (to avoid duplicates)
+  left_join(ALA_taxa_data, by = c("species_name" = "search_term")) %>%
+  rename(scientific_name_ALA = scientific_name) # renaming column to scientific_name_ALA
+
+
+# Adding range quantile column
+searched_for_data <-
+  searched_for_data %>%
+  select(-any_of("latitude_percentile")) %>% # Removing column if it's already there to avoid duplication
+  left_join(
+    ALA_data %>%
+      filter(occurrenceStatus == "PRESENT") %>%
+      filter(!is.na(decimalLatitude)) %>% # removing NAs
+      group_by(scientificName) %>%
+      summarise(latitude_percentile = ecdf(decimalLatitude)(-34.13)*100), # empirical cumulative distribution functions (ecdf)
+    by = c("scientific_name_ALA" = "scientificName")
+  )
+```
+### 2.5.2 Latitude quantile graph and stats
+```{r}
+range_plot <- searched_for_data %>%
+  filter(found_simplified_number != "?") %>%
+  ggplot(aes(x = latitude_percentile, y = found_simplified, fill = found_simplified)) +
+  geom_violin() +
+  theme_minimal() +
+  labs(
+    title = "Re-findability by latitude quantile (n = 95)",
+    x = "Latitude quantile", 
+    y = "Found?",
+    fill = "Found?") + 
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")) +
+  theme(legend.position = "none") +
+  scale_x_continuous(
+    breaks = c(0, 25, 50, 75, 100),
+    labels = c("0\n(South\nrange\nedge)", "25", "50", "75", "100\n(North\nrange\nedge)"))
+range_plot
+
+glm(as.numeric(found_simplified_number) ~ latitude_percentile,
+    family = binomial(link = "logit"),
+    data = searched_for_data) %>% # work our why na.omit doesn't work
+  summary()
+```
+# 3 - Methods analysis
+## 3.1 - Search type
+```{r}
+individual_or_group_search_plot <- ggplot(searched_for_data_YorN, aes(x = individual_or_multiple_search, fill = found_simplified)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    title = "Re-findability by search type (n = 95)",
+    x = "Was the target species searched for\nexclusively or alongside others?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(
+    labels = c("I" = "Exclusively", "M" = "Alongside others"))
+individual_or_group_search_plot
+
+individual_or_multiple_table <- table(searched_for_data_YorN$found_simplified, searched_for_data_YorN$individual_or_multiple_search)
+chisq.test(individual_or_multiple_table)
+chisq.test(individual_or_multiple_table)$residuals
+```
+## 3.2 - Species familiarity
+```{r}
+seen_before_plot <- 
+  ggplot(searched_for_data_YorN, aes(x = volunteers_seen_before, fill = found_simplified)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    title = "Re-findability by species familiarity (n = 95)",
+    x = "Had the searchers seen\nthe species before?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(
+    labels = c("N" = "No", "Y" = "Yes"))
+seen_before_plot
+
+volunteers_seen_before_table <- table(searched_for_data_YorN$found_simplified, searched_for_data_YorN$volunteers_seen_before)
+chisq.test(volunteers_seen_before_table)
+chisq.test(volunteers_seen_before_table)$residuals
+```
+
+
+## 3.3 - Uniqueness
+### 3.3.1 - Uniqueness data wrangling
+```{r}
+royal_master_list <- 
+  read.csv("royal_master_list.csv") %>%
+  mutate(genus = word(accepted_name, 1)) # adding genera column
+
+unique_genera_data <- 
+  royal_master_list %>%
+  group_by(genus) %>%
+  filter (n() == 1) %>%
+  ungroup() %>%
+  filter(accepted_name %in% searched_for_data$species_name)
+
+searched_for_data <-
+  searched_for_data %>%
+  mutate(unique_genera_in_royal = species_name %in% unique_genera_data$accepted_name)
+```
+### 3.3.2 - Uniqueness graph and stats
+```{r}
+unique_in_royal_plot <- 
+  searched_for_data %>%
+  filter(found_simplified != "?") %>%
+  ggplot(aes(x = unique_genera_in_royal, fill = found_simplified)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue", "?" = "grey")
+  ) +
+  labs(
+    title = "Re-findability by uniqueness (n = 95)",
+    x = "Is the species the only one\nof its genera in Royal?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(labels = c("FALSE" = "No", "TRUE" = "Yes"))
+unique_in_royal_plot
+
+unique_in_royal_table <- searched_for_data %>%
+  filter(found_simplified != "?") %>%
+  xtabs(~ found_simplified + unique_genera_in_royal, data = .)
+chisq.test(unique_in_royal_table)
+chisq.test(unique_in_royal_table)$residuals
+```
+
+
+
+## 3.4 - Associated species
+```{r}
+associated_species_plot <- 
+  ggplot(searched_for_data_YorN, aes(x = associated_species_known, fill = found_simplified)) + 
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    title = "Re-findability by associated species\n(n = 95)",
+    x = "Were associated species known?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(
+    labels = c("N" = "No", "Y" = "Yes"))
+associated_species_plot
+
+associated_species_table <- table(searched_for_data_YorN$found_simplified, searched_for_data_YorN$associated_species_known)
+chisq.test(associated_species_table)
+chisq.test(associated_species_table)$residuals
+```
+## 3.5 - Search shape
+```{r}
+linear_or_area_plot <- 
+  ggplot(searched_for_data_YorN, aes(x = linear_or_area_search, fill = found_simplified)) + 
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    title = "Re-findability by search shape (n = 95)",
+    x = "Was a linear or area-based\nsearch conducted?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(labels = c("A" = "Area", "L" = "Linear"))
+linear_or_area_plot
+
+linear_or_area_table <- table(searched_for_data_YorN$found_simplified, searched_for_data_YorN$linear_or_area_search)
+chisq.test(linear_or_area_table)
+chisq.test(linear_or_area_table)$residuals
+```
+
+## 3.6 Flowering
+```{r}
+flowering_time_plot <- 
+  searched_for_data_YorN %>%
+  filter(searched_in_flowering_time != "#N/A") %>%
+   ggplot(aes(x = searched_in_flowering_time, fill = found_simplified)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    title = "Re-findability by search timing (n = 71)",
+    x = "Was search conducted during\nflowering time?",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_discrete(
+    labels = c("N" = "No", "Y" = "Yes"))
+flowering_time_plot
+
+flowering_time_table <- 
+  searched_for_data_YorN %>%
+  filter(searched_in_flowering_time != "#N/A") %>%
+  with(table(found_simplified, searched_in_flowering_time))
+chisq.test(flowering_time_table)
+chisq.test(flowering_time_table)$residuals
+
+# Species found with fertile material outside flowering time
+searched_for_data %>%
+  filter(searched_in_flowering_time == "N", 
+         fertile_material_present == "Y",
+         found_simplified == "Yes") %>%
+  select(species_name, searched_in_flowering_time, fertile_material_present, found)
+```
+
+
+# 4 - Mapping
+## 4.1 - Royal NP map and data wrangling
+### 4.1.1 - Royal NP map and outline
+```{r}
+Royal_map <- st_read("royal_map/Royal_outline.shp") %>%
+  st_transform(crs = 4326) %>% # assigning WGS 84 coordinate system
+  st_make_valid()
+
+Royal_roads <- st_read("royal_map/Royal_roads.gpx", layer = "tracks") %>% # reading road file
+  st_transform(crs = 4326) %>%
+  st_make_valid() %>%
+  { rmapshaper::ms_clip(target = ., clip = Royal_map[1]) } # limiting extent of roads to borders of Royal map
+
+searched_for_data_sf <- searched_for_data %>%
+  st_as_sf(coords = c("search_area_long", "search_area_lat"), crs = 4326) %>%
+  st_transform(crs = st_crs(Royal_map))
+```
+### 4.1.2 - Royal NP long unobserved species
+```{r}
+royal_all_long_unobserved <- read.csv("royal_long_unobserved_all.csv")
+
+royal_all_long_unobserved_sf <- royal_all_long_unobserved %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(crs = st_crs(Royal_map))
+```
+### 4.1.3 - Australia map inset
+```{r}
+royal_bbox <- st_as_sfc(st_bbox(Royal_map))
+
+aus_map <- ne_countries(scale = "medium", country = "Australia", returnclass = "sf") # Australia map
+aus_states <- ne_states(country = "Australia", returnclass = "sf") # state boundaries
+royal_coords <- st_sf(
+              name = "Royal National Park", 
+              geometry = st_sfc(st_point(c(151.07, -34.13))), 
+              crs = 4326)
+
+aus_map_simple <- ne_countries(scale = "small", country = "Australia", returnclass = "sf")
+
+inset_aus_map <- inset_element(ggplot() +
+  geom_sf(data = aus_map_simple, fill = "#D8E7D0", color = "grey50") +
+  geom_sf(data = royal_coords, color = "red", size = 1, shape = 0, stroke = 0.7) +
+  theme_void() +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.3)
+  ), 
+    left = 0.7,   # horizontal placement (0 = left, 1 = right)
+    bottom = -0.4, # vertical placement (0 = bottom, 1 = top)
+    right = 0.98,  # width of inset area
+    top = 0.98     # height of inset area
+)
+```
+## 4.2 - Map building
+### 4.2.1 Native long unobserved by year
+```{r}
+# fig 1
+long_unobserved_native_by_year_map <-
+  ggplot() + 
+  geom_sf(mapping = aes(), data = Royal_map , stat = "sf", fill = "#C5DDC2", color = "grey50", alpha = 0.8) +
+  geom_sf(mapping = aes(), data = Royal_roads, stat = "sf") +
+  geom_sf(data = subset(royal_all_long_unobserved_sf, establishment_means == "native"), aes(color = year), size = 1, alpha = 1) +
+  annotation_scale(location = "br", width_hint = 0.5, pad_y = unit(1.4, "cm"), pad_x = unit(.3, "cm"), line_width = 0.5, height = unit(0.2, "cm")) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() + 
+    annotation_north_arrow(location = "tr",      # top right
+                         which_north = "true", # or "grid" north
+                         style = north_arrow_fancy_orienteering(), # other styles available
+                         height = unit(1, "cm"),
+                         width = unit(1, "cm"),
+                         pad_x = unit(0.5, "cm"),
+                         pad_y = unit(0.5, "cm"))  +
+   scale_color_gradientn(
+    name = "Year last recorded",
+    colors = c("yellow", "orange", "purple4"),
+    breaks = c(seq(1870, 1990, by = 20)),
+    limits = c(1870, 1990),
+    na.value = "purple4",
+    guide = guide_colourbar(
+    barheight = unit(7, "cm"),
+    barwidth = unit(0.5, "cm"))) +
+  theme(
+    legend.position = "right",
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks.length = unit(0, "pt"),
+    plot.title = element_text(hjust = 0, size = 10),
+    plot.margin=unit(c(.0,.0,.0,.0),"cm")
+  ) +
+  labs(
+    colour = "Establishment means"
+  )
+long_unobserved_native_by_year_map + inset_aus_map
+```
+### 4.2.2 Target species by search outcome
+```{r}
+searched_map_by_found <- 
+  ggplot() + 
+  geom_sf(mapping = aes(), data = Royal_map , stat = "sf", fill = "#C5DDC2", color = "grey50", alpha = 0.8) +
+  geom_sf(mapping = aes(), data = Royal_roads, stat = "sf") +
+  geom_sf(data = searched_for_data_sf, aes(color = found_simplified_withF), size = 1.5, alpha = 1) +
+  annotation_scale(location = "br", width_hint = 0.5, pad_y = unit(1.4, "cm"), pad_x = unit(.3, "cm"), line_width = 0.5, height = unit(0.2, "cm")) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() + 
+    annotation_north_arrow(location = "tr",      # top right
+                         which_north = "true", # or "grid" north
+                         style = north_arrow_fancy_orienteering(), # other styles available
+                         height = unit(1, "cm"),
+                         width = unit(1, "cm"),
+                         pad_x = unit(0.5, "cm"),
+                         pad_y = unit(0.5, "cm"))  +
+   scale_color_manual(
+    name = "Search outcome",
+    values = c(
+    "Yes" = "orange",
+    "No" = "darkblue",
+    "?" = "grey",
+    "Failed search" = "brown"),
+    labels = c(
+      "?" = "Unknown (1)",
+      "Yes" = "Found (27)",
+      "No" = "Not found (68)",
+      "Failed search" = "Search not conducted (4)"
+    )) +
+  theme(
+    legend.position = "right",
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks.length = unit(0, "pt"),
+    plot.title = element_text(hjust = 0, size = 10),
+    plot.margin=unit(c(.0,.0,.0,.0),"cm")
+  )
+searched_map_by_found + inset_aus_map
+```
+## 4.3 - Range edge maps
+### 4.3.1 - Range data wrangling
+```{r}
+# Checking range edge species, selecting top 3 and bottom 3 to visualize
+searched_for_data %>%
+  arrange(latitude_percentile) %>%
+  select(species_name, latitude_percentile)
+```
+### 4.3.2 Range map creation
+```{r}
+species_range_map_function <- function(species) {
+  
+  coords <- 
+    galah_call() %>%
+    identify(species) %>%
+    geolocate(aus_map_simple) %>%
+    collect() %>%
+    filter(!is.na(decimalLatitude), !is.na(decimalLongitude)) %>%
+    st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
+  
+  ggplot(data = aus_map) +
+    geom_sf(fill = "#C5DDC2", 
+            color = "grey50", 
+            alpha = 0.8) +
+    geom_sf(data = aus_states, 
+            fill = NA, 
+            color = "gray30") +
+    geom_sf(data = coords, 
+            aes(color = "Observations"), 
+            size = 1.3) +
+    geom_sf(data = royal_coords, 
+            aes(color = "Royal National Park"), 
+            size = 2) +
+    scale_color_manual(
+      values = c(
+        "Royal National Park" = "blue4", 
+        "Observations" = "darkorange"),
+      name = NULL) +
+    coord_sf(
+      xlim = c(110, 157),
+      ylim = c(-45, -9),
+      expand = FALSE
+    ) + 
+    theme_minimal() +
+    labs(title = species)
+}
+
+
+range_extreme_species_maps <- map(c(
+  "Juncus pallidus", 
+  "Leptospermum continentale", 
+  "Gahnia radula",
+  "Flagellaria indica", 
+  "Cyperus cyperoides", 
+  "Sacciolepis indica"
+), species_range_map_function)
+```
+
+### 4.3.3 - Building range map figure
+```{r}
+# Creating a map theme
+range_map_theme <- 
+  function(m) { 
+    m + theme(
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "italic", , size = 9))}
+
+range_edge_species_maps <- 
+ range_extreme_species_maps %>%
+  lapply(range_map_theme) %>%
+  wrap_plots(ncol = 3, guides = "collect") + 
+  plot_annotation(tag_levels = 'a') &
+  theme(legend.position = "bottom")
+range_edge_species_maps
+```
+
+# 5 - Other graphs
+## 5.1 - Treemap
+### 5.1.1 - Treemap data wrangling
+```{r}
+#fixing names as they differ on ALA
+master_data <- 
+  master_data %>%
+  mutate(species_name_ALA = case_when(
+    species_name == "Calamagrostis quadriseta" ~ "Deyeuxia quadriseta",
+    species_name == "Sphaeropteris australis" ~ "Cyathea leichhardtiana",
+    species_name == "Chenopodium trigonon" ~ "Einadia trigonos",
+    species_name == "Cyanothamnus rigens" ~ "Boronia rigens",
+    species_name == "Setaria distans" ~ "Paspalidium distans",
+    species_name == "Microsorum pustulatum" ~ "Zealandia pustulata", # multiple synonyms, but the record links to this species
+    species_name == "Genoplesium nudiscapum" ~ "Corunastylis nudiscapa",
+    species_name == "Genoplesium woollsii" ~ "Corunastylis woollsii",
+    species_name == "Lastreopsis decomposita" ~ "Parapolystichum calanthum", # AusTraits uses this name for the one trait record, as opposed to the accepted Lastreopsis calantha
+    species_name == "Stolonochloa pygmaea" ~ "Panicum pygmaeum",
+    species_name == "Zostera capricorni" ~ "Zostera muelleri subsp. capricorni",
+    species_name == "Gaudium parvifolium" ~ "Leptospermum parvifolium",
+    TRUE ~ species_name))
+
+# Attaching AusTraits data to long unobserved data
+austraits_long_unobserved <- 
+  austraits$traits %>%
+  filter(taxon_name %in% c(master_data$species_name)) %>%
+  left_join(master_data %>% # add re-found or not column
+              select(species_name, taxonomy_issue, location_issue, refindable), by = c("taxon_name" = "species_name"))
+# And then to woodiness
+woodiness_long_unobserved <-
+  austraits_long_unobserved %>%
+  filter(trait_name == "woodiness_detailed") %>%
+  filter(value %in% c("woody", "herbaceous")) %>%
+  group_by(taxon_name) %>%
+  filter(n_distinct(value) == 1) %>%
+  ungroup() %>%
+  distinct(taxon_name, .keep_all = TRUE) %>%
+  rename(woodiness = value) %>% # renaming column to "woodiness" 
+  select(taxon_name, woodiness, taxonomy_issue, location_issue) %>%
+  mutate(refindable = case_when(
+    location_issue == "Y" & taxonomy_issue == "Y" ~ "Location and taxonomy issue",
+    location_issue == "Y" & taxonomy_issue == "N" ~ "Location issue",
+    location_issue == "N" & taxonomy_issue == "Y" ~ "Taxonomy issue",
+    location_issue == "N" & taxonomy_issue == "N" ~ "No issues"
+  ))
+```
+### 5.1.2 - Treemap graph 
+```{r}
+woodiness_treemap <- 
+  woodiness_long_unobserved %>%
+  count(woodiness, refindable) %>%
+  mutate(woodiness = factor(woodiness))
+
+curation_treemap <- 
+  ggplot(woodiness_treemap, 
+         aes(area = n, 
+             fill = refindable, 
+             subgroup = woodiness, 
+             label = n)) +
+    geom_treemap(color = "black", size = 2) +  
+    geom_treemap_subgroup_border(color = "black", size = 2) + 
+    geom_treemap_text(
+      aes(label = n),
+      place = "centre",
+      size = 8,
+      colour = "white",
+      grow = FALSE,
+      fontface = "bold"
+    ) +
+    geom_treemap_subgroup_text(
+    place = "centre",
+    colour = "black", 
+    size = 12, 
+    fontface = "bold"
+    ) +
+    labs(fill = "Re-findable?") +
+    theme(legend.position = "right") +
+  scale_fill_manual(
+    values = c("Location and taxonomy issue" = "darkblue",
+               "Location issue" = "grey",
+               "Taxonomy issue" = "brown",
+               "No issues" = "orange"),
+    labels = c("Location and taxonomy issue" = "No (Location and taxonomy issue)",
+               "Location issue" = "No (Location issue)",
+               "Taxonomy issue" = "No (Taxonomy issue)",
+               "No issues" = "Yes"),
+     breaks = c("No issues", "Taxonomy issue", "Location issue", "Location and taxonomy issue"))
+
+curation_treemap
+```
+## 5.2 - Long unobserved by family
+### 5.2.1 - Family data wrangling
+```{r}
+family_all_species_data <-
+  master_data %>%
+    count(family) %>%
+    mutate(family = if_else(n < 5, "Other families", family)) %>%
+    group_by(family) %>% 
+    summarise(n = sum(n), .groups = "drop") %>%
+    mutate(family = reorder(family, n)) %>%
+    mutate(life_form = case_when(
+      family %in% c("Cyperaceae", "Poaceae", "Juncaceae", "Restionaceae") ~ "Graminoids",
+      family %in% c("Myrtaceae", "Fabaceae", "Asteraceae", "Rhamnaceae", "Proteaceae", "Polygonaceae",
+                      "Plantaginaceae", "Lauraceae", "Ericaceae", "Araliaceae") ~ "Eudicots",
+      family %in% c("Orchidaceae", "Asparagaceae") ~ "Non-graminoid monocots",
+      TRUE ~ "Other families"
+    ))
+```
+
+### 5.2.2 - Family plot
+```{r}
+family_all_species_plot <- 
+  ggplot() + 
+    geom_bar(data = filter(family_all_species_data, family != "Other families"),
+             aes(x = family, y = n, fill = life_form),
+             stat = "identity") +
+    geom_bar(data = filter(family_all_species_data, family == "Other families"),
+             aes(x = family, y = n, fill = life_form),
+             stat = "identity",
+             show.legend = FALSE) +
+    coord_flip() +
+    geom_text(
+      data = family_all_species_data,
+      aes(x = family, y = n, label = n),
+      hjust = -0.5, 
+      size = 3, 
+      fontface = "bold") +
+    theme_classic() + 
+    theme() +
+    scale_fill_manual(
+      values = c("Graminoids" = "brown",
+                 "Eudicots" = "orange",
+                 "Non-graminoid monocots" = "darkblue"
+    )) +
+    labs(y = "Species count",
+         fill = "Life form",
+         x = "Family") +
+  scale_y_continuous(
+    limits = c(0, 120)
+  )
+family_all_species_plot
+```
+## 5.3 - Abundance
+### 5.3.1 - Abundance data wrangling
+```{r}
+abundance_data <- searched_for_data %>%
+  mutate(individuals_found_cleaned = case_when(
+         individuals_found %in% c("") ~ NA,
+         TRUE ~ individuals_found),
+         individuals_found_cleaned = parse_number(individuals_found_cleaned)) %>% # pulling only numbers
+  mutate(growth_form = case_when(
+    quadrat_size_m2 %in% c(64) ~ "Herb",
+    quadrat_size_m2 %in% c(144) ~ "Shrub",
+    quadrat_size_m2 %in% c(400) ~ "Tree")) %>%
+  filter(found_simplified == "Yes") %>%
+  mutate(abundance_density = individuals_found_cleaned / quadrat_size_m2,
+        abundance_density = case_when(
+      individuals_found == "many" ~ 0.7, # manually assign abundance density to "many"
+      TRUE ~ abundance_density)) %>%
+  mutate(abundance_density = as.numeric(abundance_density)) %>%
+  select(species_name, individuals_found, individuals_found_cleaned, found_simplified, quadrat_size_m2, abundance_density, growth_form)
+```
+### 5.3.2 - Abundance data plot and stat
+```{r}
+abundance_density_plot <- 
+  ggplot(
+    filter(abundance_data, !is.na(abundance_density)), 
+    aes(x = abundance_density*10, fill = growth_form)) +
+  geom_histogram(binwidth = 1, 
+                 color = "black",
+                 linewidth = 0.4) +
+  geom_text(
+    data = filter(abundance_data, !is.na(abundance_density)),
+    aes(x = abundance_density * 10, label = ifelse(..count.. == 0, "", ..count..)),
+    stat = "bin",
+    binwidth = 1,
+    color = "black",
+    vjust = -0.5,
+    inherit.aes = FALSE
+  ) +
+  theme_classic() +
+  labs(
+    x = bquote("Aboveground stems per 10m"^2),
+    y = "Species",
+    fill = "Growth form") +
+  scale_x_continuous(breaks = seq(0, 7, by = 1),
+                     labels = c("<1", "1 - <2", "2 - <3", "3 - <4", "4 - <5", "5 - <6", "6 - <7", "≥7")) +
+  scale_fill_manual(values = c("Herb" = "brown", "Shrub" = "orange", "Tree" = "darkblue"))
+abundance_density_plot
+```
+## 5.4 - Example search path
+```{r}
+gaia_gpx <- st_read("sphaeropteris-australis.gpx", layer = "tracks")
+
+# Transform to a common CRS (Web Mercator for OSM
+Royal_map_osm <- st_transform(Royal_map, 3857)
+Royal_roads_osm <- st_transform(Royal_roads, 3857)
+gaia_gpx_osm <- st_transform(gaia_gpx, 3857)
+
+# Compute bounding boxes
+gaia_bbox_numeric <- st_bbox(gaia_gpx_osm)
+gaia_bbox_osm <- st_as_sfc(gaia_bbox_numeric)
+Royal_bbox <- st_bbox(Royal_map_osm)
+
+# Main GPX map
+gaia_path_map <- ggplot() +
+  # Base map
+  annotation_map_tile(type = "osm", zoom = 18) +
+  
+  # Polygon map and roads
+  geom_sf(data = Royal_map_osm, fill = NA, color = "grey50", alpha = 0.8) +
+  geom_sf(data = Royal_roads_osm, color = "grey30") +
+  
+  # GPX track
+  geom_sf(data = gaia_gpx_osm, color = "red", linewidth = 0.7) +
+  
+  # Scale and north arrow
+  annotation_scale(location = "bl", width_hint = 0.5, pad_y = unit(1.4, "cm"), pad_x = unit(.3, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true", style = north_arrow_fancy_orienteering(),
+                         height = unit(1, "cm"), width = unit(1, "cm"), pad_x = unit(0.5, "cm"), pad_y = unit(0.5, "cm")) +
+  
+  # Coordinate limits around GPX with buffer
+  coord_sf(
+    xlim = c(gaia_bbox_numeric["xmin"], gaia_bbox_numeric["xmax"]),
+    ylim = c(gaia_bbox_numeric["ymin"], gaia_bbox_numeric["ymax"]),
+    expand = TRUE
+  ) +
+  
+  # Clean theme
+  theme_classic() +
+  theme(
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.margin = unit(c(0,0,0,0), "cm")
+  )
+
+# Inset Royal map
+inset_royal_map <- inset_element(
+  ggplot() +
+    geom_sf(data = Royal_map_osm, fill = "#D8E7D0", color = "grey50") +
+    geom_sf(data = gaia_bbox_osm, color = "red", linewidth = 0.9) +
+    coord_sf(
+      xlim = c(Royal_bbox["xmin"], Royal_bbox["xmax"]),
+      ylim = c(Royal_bbox["ymin"], Royal_bbox["ymax"]),
+      expand = TRUE
+    ) +
+    theme_void() +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      panel.border = element_rect(color = "black", fill = NA)
+    ),
+  left = 0.55, bottom = 0.35, right = 0.95, top = 1
+)
+
+# Combine main map + inset
+gaia_final_map <- gaia_path_map + inset_royal_map
+gaia_final_map
+```
+## 5.5 - Re-findability by year
+```{r}
+year_plot_YorN <- 
+  ggplot(searched_for_data_YorN, aes (x=sampled_year, fill = found_simplified_withF)) + # bar plot with samples collected by year
+    geom_bar() +
+  scale_fill_manual(
+    values = c("Yes" = "orange", "No" = "darkblue")
+  ) +
+  labs(
+    x = "Year",
+    y = "Species count",
+    fill = "Found?") + 
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(min(searched_for_data$sampled_year), max(searched_for_data$sampled_year), by = 2),
+                     labels = function(x) ifelse(x %% 4 == 0, x, ""))
+year_plot_YorN
+```
+# 6 - Printing final plots
+## 6.1 - Plot data wrangling
+```{r}
+# creating a theme for figure format
+figure_theme <- (function(p) { 
+    p + theme(legend.position = "none", 
+              plot.title = element_text(face = "bold", size = 10))})
+
+#combining plots
+
+trait_plots <-
+  list(
+  woodiness_plot,
+    resprouting_plot,
+    seedbank_simplified_plot,
+    log_height_plot, 
+    range_plot
+    ) %>%
+    lapply(figure_theme) %>%
+    wrap_plots(ncol = 2, guides = "collect") +
+    plot_annotation(tag_levels = 'a') +
+    theme(legend.position = "right")
+
+methodology_plots <-
+  list( 
+    individual_or_group_search_plot, 
+    seen_before_plot,
+    unique_in_royal_plot,
+    associated_species_plot, 
+    linear_or_area_plot,
+    flowering_time_plot
+    ) %>%
+    lapply(figure_theme) %>%
+    wrap_plots(ncol = 2, guides = "collect") + # guide refers to things like legends
+    plot_annotation(tag_levels = 'a') +  #adding labels a, b, c...
+    theme(legend.position = "right")     # Set overall legend position
+```
+
+## 6.2 - Methodology plots
+```{r}
+long_unobserved_native_by_year_map
+fig_1 <- long_unobserved_native_by_year_map + inset_aus_map # fig 1
+  ggsave("plots/fig_1.png", plot = fig_1, width = 6, height = 6, dpi = 300)
+
+family_all_species_plot # fig 2
+  ggsave("plots/fig_2.png", plot = family_all_species_plot, width = 8, height = 6, dpi = 300)
+
+range_edge_species_maps # fig 3
+  ggsave("plots/fig_3.png", plot = range_edge_species_maps, width = 8, height = 6, dpi = 300)
+
+curation_treemap # fig S1
+  ggsave("plots/fig_S1.png", plot = curation_treemap, width = 8, height = 5, dpi = 300)
+```
+## 6.3 - Results plots
+```{r}
+searched_map_by_year
+searched_map_by_found
+fig_6 <-searched_map_by_found + inset_aus_map # fig 6
+  ggsave("plots/fig_6.png", plot = fig_6, width = 6, height = 6, dpi = 300)
+
+year_plot_YorN # fig 7
+  ggsave("plots/fig_7.png", plot = year_plot_YorN, width = 8, height = 6, dpi = 300)
+year_plot
+decade_plot
+
+trait_plots # fig 8
+  ggsave("plots/fig_8.png", plot = trait_plots, width = 8, height = 6, dpi = 300)
+methodology_plots # fig 9
+  ggsave("plots/fig_9.png", plot = methodology_plots, width = 8, height = 6, dpi = 300)
+
+abundance_density_plot # fig 10
+  ggsave("plots/fig_10.png", plot = abundance_density_plot, width = 8, height = 6, dpi = 300)
+
+gaia_final_map # fig 11
+  ggsave("plots/fig_11.png", plot = gaia_final_map, width = 3, height = 5, dpi = 300)
+```
