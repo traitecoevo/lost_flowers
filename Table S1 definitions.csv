@@ -1,11 +1,38 @@
 column,description,variables
-record_link,"iNaturalist link to last sample recorded pre-1990 OR the sample we are re-sampling off of, if it is not the most recent one",
+speices_name,,
+last_recorded,Year the species was last recorded in Royal National Park,
+family,Family of species,
+sampled_year,Year of the historic voucher searched for,
 curation_tags,,"T - findable along a trail, but can't pinpoint to an exact location"
-,,I - recent record on iNat likely confirming location where otherwise uncertain
+,,I - recent record on iNaturalist likely confirming location where otherwise uncertain
 ,,S - general search area probably findable
 ,,R - remove from list due to being seen more recently
 ,,O - remove from list due to being outside of Royal
 ,,"C - sample gone, remove from list"
+taxonomy_issue,Was there taxonomic uncertainty of the historic voucher?,Y - yes
+,,N - no
+location_issue,Was there geographic uncertainty of the historic voucher?,Y - yes
+,,N - no
+refindable,"Is the species re-findable, given no taxonomic or geographic uncertainty?",Y - yes
+,,N - no
+record_link,ALA link to target historical voucher ,
+cat_no,Herbarium voucher catalogue number,
+record_notes,Historic voucher notes,
+record_month,Month the historic voucher was collected,
+record_life_stage,Life stage the historic voucher was collected at,
+search_area_coordinates,GPS coordinates of re-findable species based off of historic voucher,
+found,Was the species re-found?,Y - yes
+,,N - no
+date_searched_mmddyy,Date the contemporary search was conducted,
+month_searched,Month the contemporary search was conducted,
+people_searching,Number of people conducting the contemporary search,
+time_searched_mins,Minutes spent conducting the contemporary search,
+distance_walked_metres,Linear distance in metres covered during the contemporary search,
+gaigps_link,GaiaGPS link to search path. GPX available to download,
+life_stage,"If re-found, the life stage the species was re-found at",
+fertile_material_present,"If re-found, was there fertile material present?",Y - yes
+,,N - no
+individuals_found,Number of individuals found in prescribed quadrat,
 search_tags,,"L - in hindsight, location maybe not accurate enough"
 ,,I - location was incorrect or did not match description
 ,,R - could return to search more within the area or different area in hindsight
@@ -13,5 +40,23 @@ search_tags,,"L - in hindsight, location maybe not accurate enough"
 ,,T - possibly found it but not enough fertile material for ID
 ,,N - possible environmental changes
 ,,F - maybe missed because not flowering/visible
-,,C - used more recent iNat observations to find location
+,,C - used more recent iNaturalist observations to find location
 ,,A - awaiting ID confirmation
+2025_inat_link,"If found, link to the iNaturalist observation",
+coordinates_found,Coordinates found,
+individual_or_multiple_search,Was the contemporary search conducted only for the target species or alongside other target species?,I - individual
+,,M - multiple
+linear_or_area_search,Was the contemporary search conducted following a linear search area?,L - linear
+,,A - area
+associated_species_known,Were associated species known from the historic voucher?,Y - yes
+,,N - no
+search_again,Would this historic voucher benefit from an additional contemporary search?,Y - yes
+flowering_months_numeric,What months do the target species typically flower in? (As per PlantNET),
+searched_in_flowering_time,Was the contemporary search conducted during flowering time of species?,Y - yes
+,,N - no
+possibly_found_sterile,"Was the species possibly found sterile, and as such not identifiable to species level?",Y - yes
+,,N - no
+volunteers_seen_before,Had any of those searching observed the species previously?,Y - yes
+,,N - no
+quadrat_size_m^2,Size of quadrat in metres squared (dependent on species life form),
+density_per_m^2,"If found, density of individuals per metre squared found across quadrat",
